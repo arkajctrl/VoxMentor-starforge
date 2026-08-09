@@ -1,0 +1,5 @@
+streamlit
+qdrant-client
+python-dotenv
+requests
+groq
