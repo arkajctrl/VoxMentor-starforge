@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import json
 import urllib.request
+import urllib.error
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, VectorParams, Distance
@@ -82,21 +83,34 @@ qdrant_db = setup_vector_memory()
 # ---------------------------------------------------------
 def generate_rime_audio(text_to_speak):
     if not RIME_API_KEY:
+        st.error("RIME_API_KEY is missing from the environment.")
         return None
+        
     url = "https://users.rime.ai/v1/rime-tts"
     headers = {
         "Accept": "audio/wav",
         "Authorization": f"Bearer {RIME_API_KEY}",
         "Content-Type": "application/json"
     }
-    payload = {"text": text_to_speak, "speaker": "celeste", "modelId": "coda"}
+    
+    # Removed modelId to prevent 400 Bad Request errors
+    payload = {
+        "text": text_to_speak, 
+        "speaker": "astra"
+    }
+    
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    
     try:
         with urllib.request.urlopen(request) as response:
             return response.read()
+    except urllib.error.HTTPError as e:
+        error_message = e.read().decode("utf-8")
+        st.error(f"Rime API Error {e.code}: {error_message}")
+        return None
     except Exception as e:
-        st.error(f"Rime API Error: {e}")
+        st.error(f"System Error: {e}")
         return None
 
 # ---------------------------------------------------------
@@ -150,10 +164,21 @@ with col2:
                 feedback = response.choices[0].message.content
                 st.markdown(f"**Feedback:** {feedback}")
                 
+                st.session_state.history.append(f"Q: {st.session_state.current_question}\nA: {candidate_answer}\nFeedback: {feedback}\n")
+                
                 # Speak feedback back
-                feedback_audio = generate_rime_audio(feedback)
+                # Speak feedback back (Truncated to avoid Rime 400 limits)
+                if len(feedback) > 400:
+                    # Find the nearest period before the 400 character mark to cut it cleanly
+                    cut_index = feedback.rfind('.', 0, 400)
+                    if cut_index == -1: cut_index = 400
+                    spoken_feedback = feedback[:cut_index + 1] + " Please read the screen for your detailed breakdown."
+                else:
+                    spoken_feedback = feedback
+                    
+                feedback_audio = generate_rime_audio(spoken_feedback)
                 if feedback_audio:
-                    st.audio(feedback_audio, format="audio/wav")
+                    st.audio(feedback_audio, format="audio/wav", autoplay=True)
         elif recorded_audio and not client:
             st.error("Groq API key is missing from your .env file!")
     else:
