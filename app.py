@@ -44,149 +44,171 @@ with st.sidebar:
     st.info("STARFORGE 2026 Submission\nTrack: VoxForge")
 
 # ---------------------------------------------------------
-# 3. MAIN APP HEADER
+# 3. ROUTING LOGIC & CUSTOM 404
 # ---------------------------------------------------------
-st.markdown('<p class="main-title">VoxMentor 🎙️</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-text">Your hands-free, voice-first AI interview simulator powered by Qdrant, Groq, and Rime AI.</p>', unsafe_allow_html=True)
-st.divider()
+# Get the 'page' variable from the URL (defaults to 'interview' if blank)
+current_page = st.query_params.get("page", "interview")
 
-# ---------------------------------------------------------
-# 4. INITIALIZE SESSION STATE & QDRANT
-# ---------------------------------------------------------
-if 'history' not in st.session_state:
-    st.session_state.history = []
-if 'current_question' not in st.session_state:
-    st.session_state.current_question = ""
-
-@st.cache_resource
-def setup_vector_memory():
-    q = QdrantClient(":memory:")
-    q.create_collection(
-        collection_name="question_bank",
-        vectors_config=VectorParams(size=4, distance=Distance.COSINE),
-    )
-    # Adding dynamic contextual questions
-    q.upsert(
-        collection_name="question_bank",
-        points=[
-            PointStruct(id=1, vector=[0.1, 0.2, 0.3, 0.4], payload={"q": f"Tell me about a project where you used your skills for a {target_role} role."}),
-            PointStruct(id=2, vector=[0.5, 0.6, 0.7, 0.8], payload={"q": "How do you handle debugging a complex system failure under a tight deadline?"}),
-            PointStruct(id=3, vector=[0.9, 0.1, 0.2, 0.3], payload={"q": "Walk me through a technical challenge you faced and how you resolved it collaboratively."})
-        ]
-    )
-    return q
-
-qdrant_db = setup_vector_memory()
-
-# ---------------------------------------------------------
-# 5. RIME AI VOICE GENERATOR
-# ---------------------------------------------------------
-def generate_rime_audio(text_to_speak):
-    if not RIME_API_KEY:
-        st.error("RIME_API_KEY is missing from the environment.")
-        return None
-        
-    url = "https://users.rime.ai/v1/rime-tts"
-    headers = {
-        "Accept": "audio/wav",
-        "Authorization": f"Bearer {RIME_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    # Removed modelId to prevent 400 Bad Request errors
-    payload = {
-        "text": text_to_speak, 
-        "speaker": "astra"
-    }
-    
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    
-    try:
-        with urllib.request.urlopen(request) as response:
-            return response.read()
-    except urllib.error.HTTPError as e:
-        error_message = e.read().decode("utf-8")
-        st.error(f"Rime API Error {e.code}: {error_message}")
-        return None
-    except Exception as e:
-        st.error(f"System Error: {e}")
-        return None
-
-# ---------------------------------------------------------
-# 6. INTERVIEW WORKFLOW UI
-# ---------------------------------------------------------
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    st.subheader("🤖 Interviewer Panel")
-    if st.button("🎤 Ask Next Question", type="primary"):
-        # Fetch question from Qdrant memory based on role context
-        results = qdrant_db.scroll(collection_name="question_bank", limit=3)[0]
-        # Pick based on session history length to cycle through questions
-        q_index = len(st.session_state.history) % len(results)
-        st.session_state.current_question = results[q_index].payload['q']
-        
-        st.markdown(f"> **Interviewer:** {st.session_state.current_question}")
-        
-        with st.spinner("Generating natural voice response..."):
-            audio_bytes = generate_rime_audio(st.session_state.current_question)
-            if audio_bytes:
-                st.audio(audio_bytes, format="audio/wav", autoplay=True)
-
-with col2:
-    st.subheader("🗣️ Your Response Panel")
-    if st.session_state.current_question:
-        st.info("Click the microphone below to record your spoken answer:")
-        recorded_audio = st.audio_input("Record audio answer:")
-        
-        if recorded_audio and client:
-            st.success("Audio successfully recorded!")
-            with st.spinner("Transcribing via Whisper..."):
-                with open("user_speech.wav", "wb") as f:
-                    f.write(recorded_audio.getbuffer())
-                
-                with open("user_speech.wav", "rb") as audio_file:
-                    transcript = client.audio.transcriptions.create(
-                        model="whisper-large-v3",
-                        file=audio_file
-                    )
-                candidate_answer = transcript.text
-                st.write(f"**You said:** *{candidate_answer}*")
-            
-            with st.spinner("Evaluating performance with Llama 3..."):
-                prompt = f"Role: {target_role}. Question: '{st.session_state.current_question}'. Candidate Answer: '{candidate_answer}'. Provide concise, direct constructive evaluation and scoring out of 10."
-                
-                response = client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                feedback = response.choices[0].message.content
-                st.markdown(f"**Feedback:** {feedback}")
-                
-                st.session_state.history.append(f"Q: {st.session_state.current_question}\nA: {candidate_answer}\nFeedback: {feedback}\n")
-                
-                # Speak feedback back
-                # Speak feedback back (Truncated to avoid Rime 400 limits)
-                if len(feedback) > 400:
-                    # Find the nearest period before the 400 character mark to cut it cleanly
-                    cut_index = feedback.rfind('.', 0, 400)
-                    if cut_index == -1: cut_index = 400
-                    spoken_feedback = feedback[:cut_index + 1] + " Please read the screen for your detailed breakdown."
-                else:
-                    spoken_feedback = feedback
-                    
-                feedback_audio = generate_rime_audio(spoken_feedback)
-                if feedback_audio:
-                    st.audio(feedback_audio, format="audio/wav", autoplay=True)
-        elif recorded_audio and not client:
-            st.error("Groq API key is missing from your .env file!")
-    else:
-        st.warning("Click 'Ask Next Question' on the left to begin the interview.")
-
-# Display Conversation History Log at the bottom
-if st.session_state.history:
+if current_page == "interview":
+    # ---------------------------------------------------------
+    # 4. MAIN APP HEADER
+    # ---------------------------------------------------------
+    st.markdown('<p class="main-title">VoxMentor 🎙️</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-text">Your hands-free, voice-first AI interview simulator powered by Qdrant, Groq, and Rime AI.</p>', unsafe_allow_html=True)
     st.divider()
-    st.subheader("📜 Session Transcript Archive")
-    for item in st.session_state.history:
-        st.text(item)
+
+    # ---------------------------------------------------------
+    # 5. INITIALIZE SESSION STATE & QDRANT
+    # ---------------------------------------------------------
+    if 'history' not in st.session_state:
+        st.session_state.history = []
+    if 'current_question' not in st.session_state:
+        st.session_state.current_question = ""
+
+    @st.cache_resource
+    def setup_vector_memory():
+        q = QdrantClient(":memory:")
+        q.create_collection(
+            collection_name="question_bank",
+            vectors_config=VectorParams(size=4, distance=Distance.COSINE),
+        )
+        # Adding dynamic contextual questions
+        q.upsert(
+            collection_name="question_bank",
+            points=[
+                PointStruct(id=1, vector=[0.1, 0.2, 0.3, 0.4], payload={"q": f"Tell me about a project where you used your skills for a {target_role} role."}),
+                PointStruct(id=2, vector=[0.5, 0.6, 0.7, 0.8], payload={"q": "How do you handle debugging a complex system failure under a tight deadline?"}),
+                PointStruct(id=3, vector=[0.9, 0.1, 0.2, 0.3], payload={"q": "Walk me through a technical challenge you faced and how you resolved it collaboratively."})
+            ]
+        )
+        return q
+
+    qdrant_db = setup_vector_memory()
+
+    # ---------------------------------------------------------
+    # 6. RIME AI VOICE GENERATOR
+    # ---------------------------------------------------------
+    def generate_rime_audio(text_to_speak):
+        if not RIME_API_KEY:
+            st.error("RIME_API_KEY is missing from the environment.")
+            return None
+            
+        url = "https://users.rime.ai/v1/rime-tts"
+        headers = {
+            "Accept": "audio/wav",
+            "Authorization": f"Bearer {RIME_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        # Using 'astra', a supported default English speaker 
+        payload = {
+            "text": text_to_speak, 
+            "speaker": "astra"
+        }
+        
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        
+        try:
+            with urllib.request.urlopen(request) as response:
+                return response.read()
+        except urllib.error.HTTPError as e:
+            error_message = e.read().decode("utf-8")
+            st.error(f"Rime API Error {e.code}: {error_message}")
+            return None
+        except Exception as e:
+            st.error(f"System Error: {e}")
+            return None
+
+    # ---------------------------------------------------------
+    # 7. INTERVIEW WORKFLOW UI
+    # ---------------------------------------------------------
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.subheader("🤖 Interviewer Panel")
+        if st.button("🎤 Ask Next Question", type="primary"):
+            # Fetch question from Qdrant memory based on role context
+            results = qdrant_db.scroll(collection_name="question_bank", limit=3)[0]
+            # Pick based on session history length to cycle through questions
+            q_index = len(st.session_state.history) % len(results)
+            st.session_state.current_question = results[q_index].payload['q']
+            
+            st.markdown(f"> **Interviewer:** {st.session_state.current_question}")
+            
+            with st.spinner("Generating natural voice response..."):
+                audio_bytes = generate_rime_audio(st.session_state.current_question)
+                if audio_bytes:
+                    st.audio(audio_bytes, format="audio/wav", autoplay=True)
+
+    with col2:
+        st.subheader("🗣️ Your Response Panel")
+        if st.session_state.current_question:
+            st.info("Click the microphone below to record your spoken answer:")
+            recorded_audio = st.audio_input("Record audio answer:")
+            
+            if recorded_audio and client:
+                st.success("Audio successfully recorded!")
+                with st.spinner("Transcribing via Whisper..."):
+                    with open("user_speech.wav", "wb") as f:
+                        f.write(recorded_audio.getbuffer())
+                    
+                    with open("user_speech.wav", "rb") as audio_file:
+                        transcript = client.audio.transcriptions.create(
+                            model="whisper-large-v3",
+                            file=audio_file
+                        )
+                    candidate_answer = transcript.text
+                    st.write(f"**You said:** *{candidate_answer}*")
+                
+                with st.spinner("Evaluating performance with Llama 3..."):
+                    prompt = f"Role: {target_role}. Question: '{st.session_state.current_question}'. Candidate Answer: '{candidate_answer}'. Provide concise, direct constructive evaluation and scoring out of 10."
+                    
+                    response = client.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    feedback = response.choices[0].message.content
+                    st.markdown(f"**Feedback:** {feedback}")
+                    
+                    st.session_state.history.append(f"Q: {st.session_state.current_question}\nA: {candidate_answer}\nFeedback: {feedback}\n")
+                    
+                    # Speak feedback back (Truncated to avoid Rime 400 limits)
+                    if len(feedback) > 400:
+                        cut_index = feedback.rfind('.', 0, 400)
+                        if cut_index == -1: cut_index = 400
+                        spoken_feedback = feedback[:cut_index + 1] + " Please read the screen for your detailed breakdown."
+                    else:
+                        spoken_feedback = feedback
+                        
+                    feedback_audio = generate_rime_audio(spoken_feedback)
+                    if feedback_audio:
+                        st.audio(feedback_audio, format="audio/wav", autoplay=True)
+            elif recorded_audio and not client:
+                st.error("Groq API key is missing from your .env file!")
+        else:
+            st.warning("Click 'Ask Next Question' on the left to begin the interview.")
+
+    # Display Conversation History Log at the bottom
+    if st.session_state.history:
+        st.divider()
+        st.subheader("📜 Session Transcript Archive")
+        for item in st.session_state.history:
+            st.text(item)
+
+else:
+    # ---------------------------------------------------------
+    # 8. THE CUSTOM 404 PAGE UI
+    # ---------------------------------------------------------
+    st.markdown('<br><br>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title" style="text-align: center; font-size: 5rem;">404</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-text" style="text-align: center;">Oops! The interview room you are looking for got lost in the void.</p>', unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image("https://http.cat/404", use_container_width=True)
+        
+        st.markdown('<br>', unsafe_allow_html=True)
+        if st.button("🚀 Return to VoxMentor", type="primary", use_container_width=True):
+            st.query_params.clear()  # Clear the bad URL parameter
+            st.rerun()
