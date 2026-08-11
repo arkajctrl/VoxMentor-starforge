@@ -2,10 +2,10 @@
 **STARFORGE 2026 Hackathon Submission — VoxForge Track**
 
 ## 1. The Problem
-Text-based AI chatbots cannot prepare candidates for human conversations. Job seekers struggle with the anxiety, pacing, and verbal delivery required in a real interview.
+Text based AI chatbots cannot prepare candidates for human conversations. Job seekers struggle with the anxiety, pacing, and verbal delivery required in a real interview.
 
 ## 2. Our Solution
-**VoxMentor** is a hands-free, voice-first AI interview coach. Users upload their resume and target job description. Using Qdrant as a memory brain, the app retrieves highly contextual questions. Rime AI powers the voice of the interviewer, speaking the questions out loud in a natural voice.
+**VoxMentor** is a hands free, voice-first AI interview coach. Users upload their resume and target job description. Using Qdrant as a memory brain, the app retrieves highly contextual questions. Rime AI powers the voice of the interviewer, speaking the questions out loud in a natural voice.
 
 ## 3. Local Setup Instructions
 1. Clone this repository:
